@@ -20,21 +20,31 @@ const client = new MongoClient(uri, {
 
 // Global database variable
 let db;
+let isConnected = false;
 
-// Connect to MongoDB
+// Connect to MongoDB (lazy connection for serverless)
 async function connectToMongoDB() {
+  if (isConnected && db) {
+    return db;
+  }
+
   try {
-    await client.connect();
+    if (!client.topology || !client.topology.isConnected()) {
+      await client.connect();
+    }
+    
     await client.db("admin").command({ ping: 1 });
     console.log("✅ Successfully connected to MongoDB!");
     
     // Get database instance
     db = client.db("volunteerhub");
+    isConnected = true;
     
     return db;
   } catch (error) {
     console.error("❌ Failed to connect to MongoDB:", error);
-    process.exit(1);
+    isConnected = false;
+    throw error;
   }
 }
 
@@ -117,9 +127,9 @@ app.use('/api', (req, res, next) => {
 });
 
 // Database helper functions
-const getCollection = (collectionName) => {
-  if (!db) {
-    throw new Error('Database not connected');
+const getCollection = async (collectionName) => {
+  if (!db || !isConnected) {
+    await connectToMongoDB();
   }
   return db.collection(collectionName);
 };
@@ -155,7 +165,7 @@ app.post('/api/auth/register', async (req, res) => {
   try {
     const { firstName, lastName, email, username, password, phoneNumber, zipCode } = req.body;
     
-    const usersCollection = getCollection('users');
+    const usersCollection = await getCollection('users');
     
     // Check if user already exists
     const existingUser = await usersCollection.findOne({
@@ -205,7 +215,7 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const { username, password } = req.body;
     
-    const usersCollection = getCollection('users');
+    const usersCollection = await getCollection('users');
     
     // Find user
     const user = await usersCollection.findOne({
@@ -260,7 +270,7 @@ app.post('/api/auth/login', async (req, res) => {
 // Activities Routes
 app.get('/api/activities', async (req, res) => {
   try {
-    const activitiesCollection = getCollection('activities');
+    const activitiesCollection = await getCollection('activities');
     const activities = await activitiesCollection.find({}).toArray();
     
     res.status(200).json(activities);
@@ -277,7 +287,7 @@ app.post('/api/activities', async (req, res) => {
   try {
     const { name, description, date, startTime, endTime, location, maxParticipants } = req.body;
     
-    const activitiesCollection = getCollection('activities');
+    const activitiesCollection = await getCollection('activities');
     
     const newActivity = {
       name,
@@ -315,7 +325,7 @@ app.post('/api/activities/:id/join', async (req, res) => {
     const { id } = req.params;
     const { userId, userName } = req.body;
     
-    const activitiesCollection = getCollection('activities');
+    const activitiesCollection = await getCollection('activities');
     
     const result = await activitiesCollection.updateOne(
       { _id: new ObjectId(id) },
@@ -352,7 +362,7 @@ app.post('/api/activities/:id/join', async (req, res) => {
 // Community Posts Routes
 app.get('/api/community-posts', async (req, res) => {
   try {
-    const postsCollection = getCollection('communityPosts');
+    const postsCollection = await getCollection('communityPosts');
     const posts = await postsCollection.find({})
       .sort({ createdAt: -1 })
       .toArray();
@@ -371,7 +381,7 @@ app.post('/api/community-posts', async (req, res) => {
   try {
     const { title, content, author, authorId } = req.body;
     
-    const postsCollection = getCollection('communityPosts');
+    const postsCollection = await getCollection('communityPosts');
     
     const newPost = {
       title,
@@ -441,22 +451,34 @@ process.on('SIGINT', async () => {
   }
 });
 
-// Start server
-async function startServer() {
-  try {
-    // Connect to MongoDB first
-    await connectToMongoDB();
-    
-    // Start Express server
-    app.listen(PORT, () => {
-      console.log(`🚀 VolunteerHub Backend running on port ${PORT}`);
-      console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
-      console.log(`🔗 Test DB: http://localhost:${PORT}/api/test-db`);
-    });
-  } catch (error) {
-    console.error('Failed to start server:', error);
-    process.exit(1);
+// For serverless environments (Vercel), export the app
+// For local development, start the server
+if (process.env.NODE_ENV !== 'production') {
+  // Local development server
+  async function startServer() {
+    try {
+      // Connect to MongoDB first in local development
+      await connectToMongoDB();
+      
+      // Start Express server
+      const server = app.listen(PORT, () => {
+        console.log(`🚀 VolunteerHub Backend running on port ${PORT}`);
+        console.log(`🔗 Health check: http://localhost:${PORT}/api/health`);
+        console.log(`🔗 Test DB: http://localhost:${PORT}/api/test-db`);
+      });
+      
+      return server;
+    } catch (error) {
+      console.error('Failed to start server:', error);
+      process.exit(1);
+    }
+  }
+  
+  // Only start server in local development
+  if (require.main === module) {
+    startServer();
   }
 }
 
-startServer();
+// Export for serverless
+module.exports = app;
