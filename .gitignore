@@ -11,6 +11,9 @@ yarn-error.log*
 .env.test.local
 .env.production.local
 
+# API Documentation with sensitive info
+API-USAGE-GUIDE.md
+
 # Logs
 logs
 *.log

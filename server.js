@@ -41,8 +41,32 @@ async function connectToMongoDB() {
 // Middleware
 app.use(helmet());
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:5500', 'http://localhost:8081'],
-  credentials: true
+  origin: [
+    // Local development
+    'http://localhost:3000',
+    'http://localhost:5500', 
+    'http://localhost:8081',
+    'http://localhost:19006', // Expo web
+    'http://localhost:8080',  // Alternative dev server
+    // React Native Metro bundler
+    'http://localhost:19000',
+    'http://localhost:19001',
+    'http://localhost:19002',
+    // Expo development
+    'http://127.0.0.1:19006',
+    'http://127.0.0.1:8081',
+    // Mobile development IPs (you may need to add your computer's IP)
+    'http://192.168.1.0/24',  // Common local network range
+    // Production domains (add your deployed app URLs here)
+    'https://your-react-app.vercel.app',
+    'https://your-react-native-web.netlify.app',
+    // Allow any localhost port for development
+    /^http:\/\/localhost:\d+$/,
+    /^http:\/\/127\.0\.0\.1:\d+$/,
+  ],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 
 // Rate limiting
@@ -54,6 +78,43 @@ app.use(limiter);
 
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
+
+// API Key middleware for bypassing Vercel protection
+const API_KEY = process.env.API_KEY || 'vh_api_key_2025_secure_access';
+
+const apiKeyAuth = (req, res, next) => {
+  // Check for API key in headers
+  const apiKey = req.headers['x-api-key'] || req.headers['authorization']?.replace('Bearer ', '');
+  
+  // If API key is provided and valid, allow access
+  if (apiKey === API_KEY) {
+    return next();
+  }
+  
+  // For health check and test endpoints, allow without API key for web browser access
+  if (req.path === '/api/health' || req.path === '/api/test-db') {
+    return next();
+  }
+  
+  // For other endpoints, require API key or valid JWT
+  const token = req.headers.authorization?.split(' ')[1];
+  if (!apiKey && !token) {
+    return res.status(401).json({
+      message: 'API key or authentication token required',
+      hint: 'Include X-API-Key header or Authorization header'
+    });
+  }
+  
+  next();
+};
+
+// Apply API key middleware to all routes except health checks
+app.use('/api', (req, res, next) => {
+  if (req.path === '/health' || req.path === '/test-db') {
+    return next();
+  }
+  return apiKeyAuth(req, res, next);
+});
 
 // Database helper functions
 const getCollection = (collectionName) => {
